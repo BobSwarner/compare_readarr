@@ -6,8 +6,10 @@ Guidance for Claude Code (and other AI assistants) working in this repository.
 
 A single-file Python utility, `compare_readarr.py`, that compares a Readarr
 library stored in PostgreSQL against the files on the local filesystem. It
-reports files that are in the DB but missing on disk, and files on disk that
-Readarr doesn't track. There is no package, no build step, and no test suite.
+reports three things: files in the DB but missing on disk (MISSING), files on
+disk that Readarr doesn't track (ORPHANED), and tracked files whose path
+doesn't match the book's author/title (MISMATCH). There is no package, no build
+step, and no test suite.
 
 ## Layout
 
@@ -47,6 +49,14 @@ adding a new option, preserve this pattern:
   the root, the script prints a diagnostic with sample stored paths.
 - `--limit` (default 10) truncates only the *displayed/exported* lists; summary
   counts always reflect true totals.
+- The MISMATCH check (`find_mismatches`) is a heuristic comparing the stored
+  path's author directory / book folder against the book's stored author/title.
+  It uses `_norm_text` (accent- and punctuation-insensitive) and tolerates a
+  `Series #n - ` prefix and a trailing `(year)` on the folder. It reads no file
+  contents. Author mismatches are high-confidence; title mismatches are fuzzier
+  and can be disabled via `--no-title-check` (or the whole check via
+  `--no-mismatch-check`). When tuning it, guard against false positives from
+  subtitles and series prefixes.
 - Exit code is non-zero when any discrepancy is found (cron/alert friendly).
 
 ## Conventions

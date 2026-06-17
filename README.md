@@ -6,9 +6,13 @@ report discrepancies in both directions:
 
 - **MISSING** — tracked in Readarr's `BookFiles` table, but the file is not on disk.
 - **ORPHANED** — present on disk, but not tracked in Readarr.
+- **MISMATCH** — tracked in Readarr, but the associated file's path doesn't match
+  the book's author and/or title — i.e. the wrong file appears to be linked to
+  the book.
 
-This is handy for finding books Readarr thinks it has but doesn't, or files
-sitting on disk that Readarr never imported.
+This is handy for finding books Readarr thinks it has but doesn't, files
+sitting on disk that Readarr never imported, or books pointing at the wrong
+file.
 
 ## Requirements
 
@@ -55,6 +59,8 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--quiet`       | `QUIET`      | `false`                      | Print summary counts only, not individual paths. |
 | `--limit`       | `LIMIT`      | `10`                         | Report at most this many files per category (`0` = unlimited). |
 | `--path-map`    | `PATH_MAP`   | (none)                       | Rewrite DB path prefixes to on-disk paths (see below). |
+| `--no-mismatch-check` | `NO_MISMATCH_CHECK` | `false`           | Skip the MISMATCH check entirely. |
+| `--no-title-check`    | `NO_TITLE_CHECK`    | `false`           | In the MISMATCH check, compare author folders only (ignore titles). |
 | `--env-file`    | `ENV_FILE`   | `.env`                       | Path to the env file to load. |
 | `--no-env-file` | —            | —                            | Do not load any env file. |
 
@@ -106,6 +112,23 @@ PATH_MAP=/media=/data/media
 4. Compares the two sets and reports MISSING and ORPHANED files. DB paths
    outside `--root` are ignored so a multi-root library doesn't produce false
    results.
+5. For each tracked file, checks that the author directory in its path matches
+   the book's author, and that the book folder reflects the book's title; any
+   that don't are reported as MISMATCH.
+
+### The MISMATCH check
+
+The expected layout puts each file under its author and a per-book folder:
+`<root>/<Author>/[Series]/[Series #n - ]<Book Title>[ (year)]/<file>`. The check
+compares those path components against the author/title Readarr has stored for
+the book. Comparison is accent- and punctuation-insensitive, and the title
+match tolerates a leading `Series #n - ` prefix and a trailing `(year)`.
+
+It is a **heuristic** based on stored paths vs. stored metadata — it does not
+read file contents. Author-folder mismatches are high-confidence; title
+mismatches are fuzzier. If titles produce false positives in your library, add
+`--no-title-check` to compare author folders only, or `--no-mismatch-check` to
+disable the check entirely.
 
 ## License
 

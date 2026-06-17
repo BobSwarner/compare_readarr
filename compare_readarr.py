@@ -7,6 +7,8 @@ the local filesystem, and report discrepancies in both directions:
 
   * MISSING  - tracked in Readarr's BookFiles table, but the file is not on disk
   * ORPHANED - present on disk, but not tracked in Readarr's BookFiles table
+  * MISMATCH - tracked in Readarr, but the file's path does not match the book's
+               author/title (i.e. the wrong file appears to be associated)
 
 Expected on-disk layout (this is informational only; the comparison is driven
 by Readarr's stored paths, so an unusual layout still works):
@@ -36,7 +38,9 @@ Requires: Python 3.8+, psycopg2 (`pip install psycopg2-binary`).
 import argparse
 import json
 import os
+import re
 import sys
+import unicodedata
 from pathlib import Path
 
 
@@ -197,6 +201,21 @@ def parse_args(argv=None):
         "a container and stores a different mount path than the host. "
         "Repeatable. (env: PATH_MAP, entries separated by ';')",
     )
+    p.add_argument(
+        "--no-mismatch-check",
+        action="store_true",
+        default=env_bool(os.environ.get("NO_MISMATCH_CHECK", "")),
+        help="Skip the MISMATCH check (files whose path doesn't match the "
+        "book's author/title in Readarr). (env: NO_MISMATCH_CHECK)",
+    )
+    p.add_argument(
+        "--no-title-check",
+        action="store_true",
+        default=env_bool(os.environ.get("NO_TITLE_CHECK", "")),
+        help="For the MISMATCH check, compare author folders only and ignore "
+        "title differences (titles are fuzzier and can yield false "
+        "positives). (env: NO_TITLE_CHECK)",
+    )
     args = p.parse_args(argv)
 
     # EXT env var is comma-separated; merge it in if --ext wasn't given on CLI.
@@ -301,6 +320,85 @@ def normalize(path):
     return os.path.normpath(path)
 
 
+def _norm_text(s):
+    """Normalize a name/title for fuzzy comparison.
+
+    Lower-cases, strips accents, and reduces all runs of non-alphanumeric
+    characters to single spaces, so "A.G. Riddle" == "AG  Riddle" and
+    "Caliban's War" == "Calibans War".
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^0-9a-zA-Z]+", " ", s.lower())
+    return s.strip()
+
+
+def find_mismatches(db_rows, root, check_titles=True):
+    """Find books whose associated file is likely the wrong one.
+
+    The expected layout is <root>/<Author>/.../<book folder>/<file>. A file is
+    flagged when the author directory in its path doesn't match the book's
+    author in Readarr, or (optionally) when the book folder doesn't reflect the
+    book's title. This is a heuristic based on stored paths vs. stored
+    metadata; it does not read file contents.
+    """
+    root_norm = normalize(root)
+    results = []
+    for r in db_rows:
+        path = normalize(r["path"])
+        under_root = path == root_norm or (path + os.sep).startswith(root_norm + os.sep)
+        if not under_root:
+            continue
+        rel = path[len(root_norm):].lstrip(os.sep)
+        parts = rel.split(os.sep)
+        if len(parts) < 2:
+            continue  # need at least <author>/.../<file> to judge
+        author_dir = parts[0]
+        book_folder = parts[-2]
+
+        reasons = []
+
+        db_author = r.get("author") or ""
+        if db_author:
+            na, nd = _norm_text(db_author), _norm_text(author_dir)
+            if na and nd and not (na == nd or na in nd or nd in na):
+                reasons.append(
+                    f"author folder '{author_dir}' != book author '{db_author}'"
+                )
+
+        db_title = r.get("book") or ""
+        if check_titles and db_title:
+            nt = _norm_text(db_title)
+            nf = _norm_text(book_folder)
+            # Folder "core": drop a leading "Series #n - " prefix and a trailing
+            # "(YYYY)" so the comparison focuses on the title itself.
+            core = book_folder.rsplit(" - ", 1)[-1]
+            core = re.sub(r"\(\d{4}\)\s*$", "", core).strip()
+            nc = _norm_text(core)
+            title_ok = bool(nt) and (
+                nt in nf
+                or (len(nc) >= 3 and (nc in nt or nt in nc))
+            )
+            if not title_ok:
+                reasons.append(
+                    f"book folder '{book_folder}' != book title '{db_title}'"
+                )
+
+        if reasons:
+            results.append({
+                "path": r["path"],
+                "db_path": r.get("db_path", r["path"]),
+                "author": db_author,
+                "book": db_title,
+                "path_author": author_dir,
+                "book_folder": book_folder,
+                "reasons": reasons,
+            })
+    return results
+
+
 def scan_disk(root, extensions, all_files):
     """Walk the filesystem root and return a set of normalized file paths."""
     found = set()
@@ -343,6 +441,15 @@ def main(argv=None):
     orphaned = sorted(disk_paths - db_paths)        # on disk, not in DB
     matched = db_under_root & disk_paths
 
+    # Books whose associated file path doesn't match their author/title.
+    if args.no_mismatch_check:
+        mismatches = []
+    else:
+        mismatches = find_mismatches(
+            db_rows, args.root, check_titles=not args.no_title_check
+        )
+    mismatches.sort(key=lambda m: m["path"])
+
     # Diagnostic: if the DB has files but none fall under the scanned root, the
     # stored paths almost certainly use a different prefix (e.g. Readarr in a
     # container). Show a sample so the user can build a --path-map.
@@ -364,6 +471,7 @@ def main(argv=None):
     limit = args.limit if args.limit and args.limit > 0 else None
     missing_shown = missing[:limit] if limit else missing
     orphaned_shown = orphaned[:limit] if limit else orphaned
+    mismatches_shown = mismatches[:limit] if limit else mismatches
 
     # Build a lookup so we can annotate missing files with author/book.
     row_by_path = {normalize(r["path"]): r for r in db_rows}
@@ -379,6 +487,8 @@ def main(argv=None):
     print(f"Matched               : {len(matched)}")
     print(f"MISSING (db, no file) : {len(missing)}")
     print(f"ORPHANED (file, no db): {len(orphaned)}")
+    if not args.no_mismatch_check:
+        print(f"MISMATCH (wrong file) : {len(mismatches)}")
     print()
 
     if not args.quiet:
@@ -406,6 +516,19 @@ def main(argv=None):
                 print(f"  {path}")
             print()
 
+        if mismatches:
+            shown = len(mismatches_shown)
+            suffix = f" (showing first {shown} of {len(mismatches)})" if shown < len(mismatches) else f" ({len(mismatches)})"
+            print("-" * 70)
+            print(f"MISMATCH - file path does not match the book's author/title{suffix}:")
+            print("-" * 70)
+            for m in mismatches_shown:
+                print(f"  {m['path']}")
+                print(f"      book: {m['author']} - {m['book']}")
+                for reason in m["reasons"]:
+                    print(f"      ! {reason}")
+            print()
+
     if args.json:
         report = {
             "root": args.root,
@@ -417,6 +540,7 @@ def main(argv=None):
                 "matched": len(matched),
                 "missing": len(missing),
                 "orphaned": len(orphaned),
+                "mismatched": len(mismatches),
             },
             "missing": [
                 {
@@ -428,13 +552,14 @@ def main(argv=None):
                 for p in missing_shown
             ],
             "orphaned": orphaned_shown,
+            "mismatched": mismatches_shown,
         }
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=2, ensure_ascii=False)
         print(f"JSON report written to: {args.json}")
 
     # Exit non-zero if any discrepancy found, so it's usable in cron/alerts.
-    return 1 if (missing or orphaned) else 0
+    return 1 if (missing or orphaned or mismatches) else 0
 
 
 if __name__ == "__main__":
