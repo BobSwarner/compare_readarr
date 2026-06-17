@@ -22,7 +22,7 @@ sitting on disk that Readarr never imported.
 git clone https://github.com/BobSwarner/compare_readarr.git
 cd compare_readarr
 python3 -m venv .venv
-.venv/bin/pip install psycopg2-binary
+.venv/bin/pip install -r requirements.txt
 ```
 
 ## Configuration
