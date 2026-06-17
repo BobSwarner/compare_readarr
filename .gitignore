@@ -1,0 +1,15 @@
+# Local environment / secrets
+.env
+
+# Local editor / agent config
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Generated reports
+*.json
