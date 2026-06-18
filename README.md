@@ -61,6 +61,7 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--path-map`    | `PATH_MAP`   | (none)                       | Rewrite DB path prefixes to on-disk paths (see below). |
 | `--no-mismatch-check` | `NO_MISMATCH_CHECK` | `false`           | Skip the MISMATCH check entirely. |
 | `--no-title-check`    | `NO_TITLE_CHECK`    | `false`           | In the MISMATCH check, compare author folders only (ignore titles). |
+| `--emit-sql`    | `EMIT_SQL`   | (none)                       | Write a SQL script that unlinks every MISMATCH (see below). |
 | `--env-file`    | `ENV_FILE`   | `.env`                       | Path to the env file to load. |
 | `--no-env-file` | —            | —                            | Do not load any env file. |
 
@@ -129,6 +130,35 @@ read file contents. Author-folder mismatches are high-confidence; title
 mismatches are fuzzier. If titles produce false positives in your library, add
 `--no-title-check` to compare author folders only, or `--no-mismatch-check` to
 disable the check entirely.
+
+The MISMATCH output includes each file's `BookFiles.Id`, the value you need to
+act on the association.
+
+### Fixing mismatches (`--emit-sql`)
+
+To disassociate a mismatched file from its book **without deleting the file**,
+do it in the database — note that Readarr's API `DELETE /api/v1/bookfile/{id}`
+deletes the file from disk, which is usually not what you want here.
+
+`--emit-sql unlink.sql` writes a reviewable SQL script with one
+`DELETE FROM "BookFiles" WHERE "Id" = …;` per mismatch (with the path and
+reason as comments). The script itself stays read-only against the DB; you
+review and apply the generated SQL yourself:
+
+```bash
+.venv/bin/python compare_readarr.py --limit 0 --emit-sql unlink.sql
+# review unlink.sql, then:
+pg_dump readarr-main > readarr-backup.sql     # back up first
+# stop Readarr, then apply:
+psql -d readarr-main -f unlink.sql
+# start Readarr
+```
+
+The emitted script covers **all** mismatches regardless of `--limit`. Deleting
+a `BookFiles` row removes Readarr's association but leaves the file on disk
+(it will then show as ORPHANED). To stop a later rescan from re-linking it to
+the same wrong book, move/rename the file into the correct book's folder or fix
+it via Readarr's **Manual Import**.
 
 ## License
 

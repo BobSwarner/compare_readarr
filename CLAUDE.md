@@ -57,6 +57,15 @@ adding a new option, preserve this pattern:
   and can be disabled via `--no-title-check` (or the whole check via
   `--no-mismatch-check`). When tuning it, guard against false positives from
   subtitles and series prefixes.
+- The query selects `BookFiles."Id"` (as `file_id`), `EditionId`, and the
+  book's `Id` so mismatches can be acted on. The file→book link is
+  `BookFiles.EditionId -> Editions.Id -> Editions.BookId`; there is no direct
+  BookId on a file.
+- `--emit-sql PATH` writes a reviewable script of `DELETE FROM "BookFiles"`
+  statements (one per mismatch, all of them regardless of `--limit`) to unlink
+  files while leaving them on disk. The script stays read-only against the DB —
+  it only generates SQL. NB: Readarr's API `DELETE /bookfile/{id}` deletes the
+  physical file, so direct row deletion is the file-preserving path.
 - Exit code is non-zero when any discrepancy is found (cron/alert friendly).
 
 ## Conventions
