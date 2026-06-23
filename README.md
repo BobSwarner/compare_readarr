@@ -64,7 +64,8 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--emit-sql`    | `EMIT_SQL`   | (none)                       | Write a SQL script that unlinks every MISMATCH (see below). |
 | `--emit-copy`   | `EMIT_COPY`  | (none)                       | Write a shell script of `cp -r` commands for every MISMATCH (see below). |
 | `--copy-dest`   | `COPY_DEST`  | `/data/media/Download/manual-import/` | Destination for the `--emit-copy` commands. |
-| `--copy-progress` | `COPY_PROGRESS` | `false`                  | Use `cp -rv` in `--emit-copy` so each file prints as it copies. |
+| `--copy-tool`   | `COPY_TOOL`  | `cp`                         | Command used by `--emit-copy`: `cp` or `rsync`. |
+| `--copy-progress` | `COPY_PROGRESS` | `false`                  | Show progress: `cp -rv`, or `rsync --info=progress2` (a percentage bar). |
 | `--env-file`    | `ENV_FILE`   | `.env`                       | Path to the env file to load. |
 | `--no-env-file` | —            | —                            | Do not load any env file. |
 
@@ -184,8 +185,13 @@ shell-quoted so spaces and special characters are handled.
 
 `cp` has no percentage bar. Add `--copy-progress` to emit `cp -rv`, which prints
 each file as it is copied (good for multi-file folders). For a true progress
-bar on large single files, copy with `rsync` instead, e.g.
-`rsync -a --info=progress2 SRC /data/media/Download/manual-import/`.
+bar on large single files, use `--copy-tool rsync --copy-progress`, which emits
+`rsync -a --info=progress2 SRC DEST`:
+
+```bash
+.venv/bin/python compare_readarr.py --limit 0 \
+    --emit-copy copy.sh --copy-tool rsync --copy-progress
+```
 
 ## License
 
