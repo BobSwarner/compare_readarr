@@ -71,7 +71,9 @@ adding a new option, preserve this pattern:
   `--copy-dest` (default `/data/media/Download/manual-import/`) for re-import
   via Readarr's Manual Import. Source dirs are deduped, paths are `shlex.quote`d,
   and it uses `posixpath.dirname` (the comparison paths are POSIX). Covers all
-  mismatches regardless of `--limit`.
+  mismatches regardless of `--limit`. `--copy-progress` switches the emitted
+  command to `cp -rv` (cp has no percentage bar; rsync/pv would be needed for
+  that).
 - Exit code is non-zero when any discrepancy is found (cron/alert friendly).
 
 ## Conventions

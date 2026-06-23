@@ -64,6 +64,7 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--emit-sql`    | `EMIT_SQL`   | (none)                       | Write a SQL script that unlinks every MISMATCH (see below). |
 | `--emit-copy`   | `EMIT_COPY`  | (none)                       | Write a shell script of `cp -r` commands for every MISMATCH (see below). |
 | `--copy-dest`   | `COPY_DEST`  | `/data/media/Download/manual-import/` | Destination for the `--emit-copy` commands. |
+| `--copy-progress` | `COPY_PROGRESS` | `false`                  | Use `cp -rv` in `--emit-copy` so each file prints as it copies. |
 | `--env-file`    | `ENV_FILE`   | `.env`                       | Path to the env file to load. |
 | `--no-env-file` | —            | —                            | Do not load any env file. |
 
@@ -180,6 +181,11 @@ sh copy.sh
 Like `--emit-sql`, it covers **all** mismatches regardless of `--limit`. Folders
 shared by several mismatched files are copied only once, and all paths are
 shell-quoted so spaces and special characters are handled.
+
+`cp` has no percentage bar. Add `--copy-progress` to emit `cp -rv`, which prints
+each file as it is copied (good for multi-file folders). For a true progress
+bar on large single files, copy with `rsync` instead, e.g.
+`rsync -a --info=progress2 SRC /data/media/Download/manual-import/`.
 
 ## License
 
