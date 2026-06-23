@@ -62,6 +62,8 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--no-mismatch-check` | `NO_MISMATCH_CHECK` | `false`           | Skip the MISMATCH check entirely. |
 | `--no-title-check`    | `NO_TITLE_CHECK`    | `false`           | In the MISMATCH check, compare author folders only (ignore titles). |
 | `--emit-sql`    | `EMIT_SQL`   | (none)                       | Write a SQL script that unlinks every MISMATCH (see below). |
+| `--emit-copy`   | `EMIT_COPY`  | (none)                       | Write a shell script of `cp -r` commands for every MISMATCH (see below). |
+| `--copy-dest`   | `COPY_DEST`  | `/data/media/Download/manual-import/` | Destination for the `--emit-copy` commands. |
 | `--env-file`    | `ENV_FILE`   | `.env`                       | Path to the env file to load. |
 | `--no-env-file` | —            | —                            | Do not load any env file. |
 
@@ -159,6 +161,25 @@ a `BookFiles` row removes Readarr's association but leaves the file on disk
 (it will then show as ORPHANED). To stop a later rescan from re-linking it to
 the same wrong book, move/rename the file into the correct book's folder or fix
 it via Readarr's **Manual Import**.
+
+### Staging mismatches for re-import (`--emit-copy`)
+
+`--emit-copy copy.sh` writes a shell script with one `cp -r` per mismatch that
+copies the **directory containing** the mismatched file (its book folder) into
+a staging directory — `--copy-dest`, default
+`/data/media/Download/manual-import/`. Originals are left in place, so you can
+then re-import the copies against the correct book via Readarr's **Manual
+Import**.
+
+```bash
+.venv/bin/python compare_readarr.py --limit 0 --emit-copy copy.sh
+# review copy.sh, then:
+sh copy.sh
+```
+
+Like `--emit-sql`, it covers **all** mismatches regardless of `--limit`. Folders
+shared by several mismatched files are copied only once, and all paths are
+shell-quoted so spaces and special characters are handled.
 
 ## License
 

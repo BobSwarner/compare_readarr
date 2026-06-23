@@ -66,6 +66,12 @@ adding a new option, preserve this pattern:
   files while leaving them on disk. The script stays read-only against the DB —
   it only generates SQL. NB: Readarr's API `DELETE /bookfile/{id}` deletes the
   physical file, so direct row deletion is the file-preserving path.
+- `--emit-copy PATH` writes a `/bin/sh` script of `cp -r` commands, one per
+  mismatch, copying the file's containing directory (book folder) to
+  `--copy-dest` (default `/data/media/Download/manual-import/`) for re-import
+  via Readarr's Manual Import. Source dirs are deduped, paths are `shlex.quote`d,
+  and it uses `posixpath.dirname` (the comparison paths are POSIX). Covers all
+  mismatches regardless of `--limit`.
 - Exit code is non-zero when any discrepancy is found (cron/alert friendly).
 
 ## Conventions
