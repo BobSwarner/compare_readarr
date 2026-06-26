@@ -61,6 +61,7 @@ with `--no-env-file`). `.env` is git-ignored so your credentials stay local.
 | `--path-map`    | `PATH_MAP`   | (none)                       | Rewrite DB path prefixes to on-disk paths (see below). |
 | `--no-mismatch-check` | `NO_MISMATCH_CHECK` | `false`           | Skip the MISMATCH check entirely. |
 | `--no-title-check`    | `NO_TITLE_CHECK`    | `false`           | In the MISMATCH check, compare author folders only (ignore titles). |
+| `--show-edition-matches` | `SHOW_EDITION_MATCHES` | `false`      | List files whose folder matches an edition title but not the book title. |
 | `--emit-sql`    | `EMIT_SQL`   | (none)                       | Write a SQL script that unlinks every MISMATCH (see below). |
 | `--emit-copy`   | `EMIT_COPY`  | (none)                       | Write a shell script of `cp -r` commands for every MISMATCH (see below). |
 | `--copy-dest`   | `COPY_DEST`  | `/data/media/Download/manual-import/` | Destination for the `--emit-copy` commands. |
@@ -134,6 +135,17 @@ read file contents. Author-folder mismatches are high-confidence; title
 mismatches are fuzzier. If titles produce false positives in your library, add
 `--no-title-check` to compare author folders only, or `--no-mismatch-check` to
 disable the check entirely.
+
+A book can have several **editions**, and the file is named after whichever was
+selected at import. The title check therefore accepts a folder that matches the
+book's title **or any of its edition titles**. This avoids false positives from
+a known Readarr bug where changing a book's edition title doesn't rename the
+file on disk — the folder still matches the old edition's title, which is kept
+in the `Editions` table.
+
+Files in that situation (folder matches an edition title but not the current
+book title) are **not** counted as mismatches; they're reported separately as a
+count (`EDITION-TITLE match`) and, with `--show-edition-matches`, as a list.
 
 The MISMATCH output includes each file's `BookFiles.Id`, the value you need to
 act on the association.

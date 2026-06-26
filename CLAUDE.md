@@ -57,6 +57,14 @@ adding a new option, preserve this pattern:
   and can be disabled via `--no-title-check` (or the whole check via
   `--no-mismatch-check`). When tuning it, guard against false positives from
   subtitles and series prefixes.
+- The title check matches the folder against the book title AND every edition
+  title for that book (`get_db_paths` returns `edition_titles`: a
+  `book_id -> [titles]` map built from `SELECT "BookId","Title" FROM "Editions"`).
+  A folder matching an edition title but not the book title is NOT a mismatch —
+  it's a benign artifact of the Readarr bug where changing an edition title
+  doesn't rename the file. `find_mismatches` returns `(mismatches,
+  edition_matches)`; the latter is counted as `EDITION-TITLE match` and listed
+  with `--show-edition-matches`. Edition matches do not affect the exit code.
 - The query selects `BookFiles."Id"` (as `file_id`), `EditionId`, and the
   book's `Id` so mismatches can be acted on. The file→book link is
   `BookFiles.EditionId -> Editions.Id -> Editions.BookId`; there is no direct

@@ -219,6 +219,14 @@ def parse_args(argv=None):
         "positives). (env: NO_TITLE_CHECK)",
     )
     p.add_argument(
+        "--show-edition-matches",
+        action="store_true",
+        default=env_bool(os.environ.get("SHOW_EDITION_MATCHES", "")),
+        help="List the files whose folder doesn't match the book title but "
+        "does match one of the book's edition titles (these are NOT counted "
+        "as mismatches). (env: SHOW_EDITION_MATCHES)",
+    )
+    p.add_argument(
         "--emit-sql",
         metavar="PATH",
         default=os.environ.get("EMIT_SQL"),
@@ -342,6 +350,7 @@ def get_db_paths(args):
     maps = parse_path_maps(args.path_map)
 
     rows = []
+    edition_titles = {}  # book_id -> [all edition titles for that book]
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query)
@@ -352,11 +361,21 @@ def get_db_paths(args):
                     r["db_path"] = r["path"]
                     r["path"] = apply_path_maps(r["path"], maps)
                     rows.append(r)
+        # A book can have many editions; files are named after whichever was
+        # selected at import. Collect every edition title per book so the
+        # MISMATCH check can accept a file named after any of them (handles the
+        # Readarr bug where changing the edition title doesn't rename the file).
+        with conn.cursor() as cur:
+            cur.execute('SELECT "BookId", "Title" FROM "Editions"')
+            for book_id, title in cur:
+                if book_id is None or not title:
+                    continue
+                edition_titles.setdefault(book_id, []).append(title)
     finally:
         conn.close()
 
     paths = {normalize(r["path"]) for r in rows}
-    return paths, rows
+    return paths, rows, edition_titles
 
 
 def normalize(path):
@@ -379,7 +398,7 @@ def _norm_text(s):
     return s.strip()
 
 
-def find_mismatches(db_rows, root, check_titles=True):
+def find_mismatches(db_rows, root, edition_titles=None, check_titles=True):
     """Find books whose associated file is likely the wrong one.
 
     The expected layout is <root>/<Author>/.../<book folder>/<file>. A file is
@@ -387,9 +406,19 @@ def find_mismatches(db_rows, root, check_titles=True):
     author in Readarr, or (optionally) when the book folder doesn't reflect the
     book's title. This is a heuristic based on stored paths vs. stored
     metadata; it does not read file contents.
+
+    For the title check the folder is matched against the book's title AND every
+    edition title for that book (`edition_titles[book_id]`). A folder that
+    matches an edition title but not the book title is NOT a mismatch — it is a
+    benign side effect of Readarr not renaming files after an edition-title
+    change — and is returned separately.
+
+    Returns (mismatches, edition_matches).
     """
+    edition_titles = edition_titles or {}
     root_norm = normalize(root)
-    results = []
+    mismatches = []
+    edition_matches = []
     for r in db_rows:
         path = normalize(r["path"])
         under_root = path == root_norm or (path + os.sep).startswith(root_norm + os.sep)
@@ -413,37 +442,51 @@ def find_mismatches(db_rows, root, check_titles=True):
                 )
 
         db_title = r.get("book") or ""
+        matched_edition = None
         if check_titles and db_title:
-            nt = _norm_text(db_title)
             nf = _norm_text(book_folder)
             # Folder "core": drop a leading "Series #n - " prefix and a trailing
             # "(YYYY)" so the comparison focuses on the title itself.
             core = book_folder.rsplit(" - ", 1)[-1]
             core = re.sub(r"\(\d{4}\)\s*$", "", core).strip()
             nc = _norm_text(core)
-            title_ok = bool(nt) and (
-                nt in nf
-                or (len(nc) >= 3 and (nc in nt or nt in nc))
-            )
-            if not title_ok:
-                reasons.append(
-                    f"book folder '{book_folder}' != book title '{db_title}'"
+
+            def folder_matches(title):
+                nt = _norm_text(title)
+                return bool(nt) and (
+                    nt in nf or (len(nc) >= 3 and (nc in nt or nt in nc))
                 )
 
+            if not folder_matches(db_title):
+                # The book title doesn't match; see if any edition title does.
+                for et in edition_titles.get(r.get("book_id"), []):
+                    if folder_matches(et):
+                        matched_edition = et
+                        break
+                if matched_edition is None:
+                    reasons.append(
+                        f"book folder '{book_folder}' != book title '{db_title}'"
+                    )
+
+        record = {
+            "file_id": r.get("file_id"),
+            "edition_id": r.get("edition_id"),
+            "book_id": r.get("book_id"),
+            "path": r["path"],
+            "db_path": r.get("db_path", r["path"]),
+            "author": db_author,
+            "book": db_title,
+            "path_author": author_dir,
+            "book_folder": book_folder,
+        }
         if reasons:
-            results.append({
-                "file_id": r.get("file_id"),
-                "edition_id": r.get("edition_id"),
-                "book_id": r.get("book_id"),
-                "path": r["path"],
-                "db_path": r.get("db_path", r["path"]),
-                "author": db_author,
-                "book": db_title,
-                "path_author": author_dir,
-                "book_folder": book_folder,
-                "reasons": reasons,
-            })
-    return results
+            record["reasons"] = reasons
+            mismatches.append(record)
+        elif matched_edition is not None:
+            # Not a mismatch: book title differs but an edition title matches.
+            record["matched_edition"] = matched_edition
+            edition_matches.append(record)
+    return mismatches, edition_matches
 
 
 def write_unlink_sql(path, mismatches):
@@ -560,7 +603,7 @@ def main(argv=None):
         extensions.update(e.lower() if e.startswith(".") else "." + e.lower()
                            for e in args.ext)
 
-    db_paths, db_rows = get_db_paths(args)
+    db_paths, db_rows, edition_titles = get_db_paths(args)
     disk_paths = scan_disk(args.root, extensions, args.all_files)
 
     # Only compare DB entries that live under the scanned root, so a DB with
@@ -575,12 +618,14 @@ def main(argv=None):
 
     # Books whose associated file path doesn't match their author/title.
     if args.no_mismatch_check:
-        mismatches = []
+        mismatches, edition_matches = [], []
     else:
-        mismatches = find_mismatches(
-            db_rows, args.root, check_titles=not args.no_title_check
+        mismatches, edition_matches = find_mismatches(
+            db_rows, args.root, edition_titles,
+            check_titles=not args.no_title_check,
         )
     mismatches.sort(key=lambda m: m["path"])
+    edition_matches.sort(key=lambda m: m["path"])
 
     # Diagnostic: if the DB has files but none fall under the scanned root, the
     # stored paths almost certainly use a different prefix (e.g. Readarr in a
@@ -604,6 +649,7 @@ def main(argv=None):
     missing_shown = missing[:limit] if limit else missing
     orphaned_shown = orphaned[:limit] if limit else orphaned
     mismatches_shown = mismatches[:limit] if limit else mismatches
+    edition_matches_shown = edition_matches[:limit] if limit else edition_matches
 
     # Build a lookup so we can annotate missing files with author/book.
     row_by_path = {normalize(r["path"]): r for r in db_rows}
@@ -621,6 +667,9 @@ def main(argv=None):
     print(f"ORPHANED (file, no db): {len(orphaned)}")
     if not args.no_mismatch_check:
         print(f"MISMATCH (wrong file) : {len(mismatches)}")
+        if not args.no_title_check:
+            print(f"EDITION-TITLE match   : {len(edition_matches)} "
+                  f"(book title differs, edition title matches)")
     print()
 
     if not args.quiet:
@@ -661,6 +710,18 @@ def main(argv=None):
                     print(f"      ! {reason}")
             print()
 
+        if args.show_edition_matches and edition_matches:
+            shown = len(edition_matches_shown)
+            suffix = f" (showing first {shown} of {len(edition_matches)})" if shown < len(edition_matches) else f" ({len(edition_matches)})"
+            print("-" * 70)
+            print(f"EDITION-TITLE MATCHES - folder matches an edition title, not the book title{suffix}:")
+            print("-" * 70)
+            for m in edition_matches_shown:
+                print(f"  [BookFiles.Id {m['file_id']}] {m['path']}")
+                print(f"      book title    : {m['book']}")
+                print(f"      edition match : {m['matched_edition']}")
+            print()
+
     if args.json:
         report = {
             "root": args.root,
@@ -673,6 +734,7 @@ def main(argv=None):
                 "missing": len(missing),
                 "orphaned": len(orphaned),
                 "mismatched": len(mismatches),
+                "edition_title_matches": len(edition_matches),
             },
             "missing": [
                 {
@@ -685,6 +747,7 @@ def main(argv=None):
             ],
             "orphaned": orphaned_shown,
             "mismatched": mismatches_shown,
+            "edition_title_matches": edition_matches_shown,
         }
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=2, ensure_ascii=False)
